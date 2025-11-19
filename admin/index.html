@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>用户管理后台</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 20px; }
+    h1, h2 { margin-bottom: 8px; }
+    .card { border: 1px solid #ddd; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+    label { display: inline-block; width: 80px; }
+    input { padding: 4px 6px; margin-bottom: 6px; }
+    button { padding: 4px 10px; margin-right: 8px; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+    th { background: #f5f5f5; }
+    .error { color: #c00; margin-top: 6px; }
+    .success { color: #090; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>用户管理后台</h1>
+
+  <div class="card" id="login-card">
+    <h2>管理员登录</h2>
+    <div>
+      <label>用户名</label>
+      <input id="login-username" value="admin" />
+    </div>
+    <div>
+      <label>密码</label>
+      <input id="login-password" type="password" value="" />
+    </div>
+    <button id="login-btn">登录</button>
+    <div id="login-msg" class="error"></div>
+  </div>
+
+  <div class="card" id="admin-panel" style="display:none;">
+    <h2>当前管理员：<span id="admin-name"></span></h2>
+    <button id="reload-users-btn">刷新用户列表</button>
+
+    <h3>创建用户</h3>
+    <div>
+      <label>用户名</label>
+      <input id="new-username" />
+    </div>
+    <div>
+      <label>密码</label>
+      <input id="new-password" type="password" />
+    </div>
+    <button id="create-user-btn">创建用户</button>
+    <div id="create-user-msg" class="error"></div>
+
+    <h3>用户列表</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>用户名</th>
+          <th>过期时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const apiBase = '/v11/api';
+    let token = '';
+
+    function setMessage(el, msg, ok) {
+      el.textContent = msg || '';
+      el.className = ok ? 'success' : 'error';
+    }
+
+    async function apiRequest(path, options = {}) {
+      options.headers = options.headers || {};
+      if (token) {
+        options.headers['Authorization'] = 'Bearer ' + token;
+      }
+      const res = await fetch(apiBase + path, options);
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!res.ok) {
+        throw data;
+      }
+      return data;
+    }
+
+    document.getElementById('login-btn').onclick = async () => {
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value.trim();
+      const msgEl = document.getElementById('login-msg');
+      setMessage(msgEl, '');
+      try {
+        const body = new URLSearchParams();
+        body.set('username', username);
+        body.set('password', password);
+        const data = await apiRequest('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        token = data.token;
+        document.getElementById('admin-name').textContent = username;
+        document.getElementById('login-card').style.display = 'none';
+        document.getElementById('admin-panel').style.display = 'block';
+        await loadUsers();
+      } catch (err) {
+        setMessage(msgEl, err.detail || '登录失败');
+      }
+    };
+
+    async function loadUsers() {
+      const tbody = document.getElementById('users-tbody');
+      tbody.innerHTML = '';
+      try {
+        const users = await apiRequest('/admin/users', { method: 'GET' });
+        users.forEach(u => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${u.ID}</td>
+            <td>${u.Username}</td>
+            <td>${u.ExpireAt ? (new Date(u.ExpireAt).toLocaleString()) : ''}</td>
+            <td>
+              <button data-id="${u.ID}" class="btn-delete">删除</button>
+              <button data-id="${u.ID}" class="btn-reset">改密码</button>
+              <button data-id="${u.ID}" data-expire="${u.ExpireAt || ''}" class="btn-expire">改过期时间</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('加载用户失败', err);
+      }
+    }
+
+    document.getElementById('reload-users-btn').onclick = loadUsers;
+
+    document.getElementById('create-user-btn').onclick = async () => {
+      const username = document.getElementById('new-username').value.trim();
+      const password = document.getElementById('new-password').value.trim();
+      const msgEl = document.getElementById('create-user-msg');
+      setMessage(msgEl, '');
+      if (!username || !password) {
+        setMessage(msgEl, '用户名和密码不能为空');
+        return;
+      }
+      try {
+        const body = new URLSearchParams();
+        body.set('username', username);
+        body.set('password', password);
+        await apiRequest('/admin/create_user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        setMessage(msgEl, '创建成功', true);
+        document.getElementById('new-username').value = '';
+        document.getElementById('new-password').value = '';
+        await loadUsers();
+      } catch (err) {
+        setMessage(msgEl, err.detail || '创建失败');
+      }
+    };
+
+    document.getElementById('users-tbody').onclick = async (e) => {
+      const target = e.target;
+      const id = target.getAttribute('data-id');
+      if (!id) return;
+      if (target.classList.contains('btn-delete')) {
+        if (!confirm('确认删除该用户？')) return;
+        try {
+          const body = new URLSearchParams();
+          body.set('user_id', id);
+          await apiRequest('/admin/delete_user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+          });
+          await loadUsers();
+        } catch (err) {
+          alert(err.detail || '删除失败');
+        }
+      } else if (target.classList.contains('btn-reset')) {
+        const pwd = prompt('请输入新密码');
+        if (!pwd) return;
+        try {
+          const body = new URLSearchParams();
+          body.set('user_id', id);
+          body.set('password', pwd);
+          await apiRequest('/admin/update_password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+          });
+          alert('修改密码成功');
+        } catch (err) {
+          alert(err.detail || '修改密码失败');
+        }
+      } else if (target.classList.contains('btn-expire')) {
+        const current = target.getAttribute('data-expire');
+        const input = prompt('请输入新的过期时间，格式：2025-12-31 23:59:59', current ? new Date(current).toISOString().slice(0, 19).replace('T', ' ') : '');
+        if (!input) return;
+        try {
+          const body = new URLSearchParams();
+          body.set('user_id', id);
+          body.set('expire_at', input);
+          await apiRequest('/admin/update_expire_at', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+          });
+          alert('修改过期时间成功');
+          await loadUsers();
+        } catch (err) {
+          alert(err.detail || '修改过期时间失败');
+        }
+      }
+    };
+  </script>
+</body>
+</html>
